@@ -17,8 +17,6 @@ import io.ktor.util.date.*
 import io.ktor.utils.io.*
 import kotlinx.coroutines.*
 import okhttp3.*
-import okhttp3.MediaType.Companion.toMediaTypeOrNull
-import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.internal.http.HttpMethod
 import okio.*
 import java.io.Closeable
@@ -59,8 +57,8 @@ public class OkHttpEngine(override val config: OkHttpConfig) : HttpClientEngineB
                 requestsJob[Job]!!.join()
             } finally {
                 clientCache.forEach { (_, client) ->
-                    client.connectionPool.evictAll()
-                    client.dispatcher.executorService.shutdown()
+                    client.connectionPool().evictAll()
+                    client.dispatcher().executorService().shutdown()
                 }
                 (dispatcher as Closeable).close()
             }
@@ -112,7 +110,7 @@ public class OkHttpEngine(override val config: OkHttpConfig) : HttpClientEngineB
         val requestTime = GMTDate()
         val response = engine.execute(engineRequest, requestData)
 
-        val body = response.body
+        val body = response.body()
         callContext[Job]!!.invokeOnCompletion { body?.close() }
 
         val responseContent = body?.source()?.toChannel(callContext, requestData) ?: ByteReadChannel.Empty
@@ -125,9 +123,9 @@ public class OkHttpEngine(override val config: OkHttpConfig) : HttpClientEngineB
         body: Any,
         callContext: CoroutineContext
     ): HttpResponseData {
-        val status = HttpStatusCode(response.code, response.message)
-        val version = response.protocol.fromOkHttp()
-        val headers = response.headers.fromOkHttp()
+        val status = HttpStatusCode(response.code(), response.message())
+        val version = response.protocol().fromOkHttp()
+        val headers = response.headers().fromOkHttp()
 
         return HttpResponseData(status, requestTime, headers, version, body, callContext)
     }
@@ -207,13 +205,15 @@ private fun HttpRequestData.convertToOkHttpRequest(callContext: CoroutineContext
 @OptIn(DelicateCoroutinesApi::class)
 internal fun OutgoingContent.convertToOkHttpBody(callContext: CoroutineContext): RequestBody = when (this) {
     is OutgoingContent.ByteArrayContent -> bytes().let {
-        it.toRequestBody(contentType.toString().toMediaTypeOrNull(), 0, it.size)
+        RequestBody.create(MediaType.parse(contentType.toString()), it, 0, it.size)
+        // it.toRequestBody(contentType.toString().toMediaTypeOrNull(), 0, it.size)
     }
     is OutgoingContent.ReadChannelContent -> StreamRequestBody(contentLength) { readFrom() }
     is OutgoingContent.WriteChannelContent -> {
         StreamRequestBody(contentLength) { GlobalScope.writer(callContext) { writeTo(channel) }.channel }
     }
-    is OutgoingContent.NoContent -> ByteArray(0).toRequestBody(null, 0, 0)
+    is OutgoingContent.NoContent -> RequestBody.create(null, ByteArray(0), 0, 0)
+    // is OutgoingContent.NoContent -> ByteArray(0).toRequestBody(null, 0, 0)
     else -> throw UnsupportedContentTypeException(this)
 }
 
